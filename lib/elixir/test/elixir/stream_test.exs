@@ -3,6 +3,8 @@ Code.require_file "test_helper.exs", __DIR__
 defmodule StreamTest do
   use ExUnit.Case, async: true
 
+  doctest Stream
+
   defmodule PDict do
     defstruct []
 
@@ -10,7 +12,7 @@ defmodule StreamTest do
       def into(struct) do
         {struct,
          fn
-           _, {:cont, x} -> Process.put(:stream_cont, [x|Process.get(:stream_cont)])
+           _, {:cont, x} -> Process.put(:stream_cont, [x | Process.get(:stream_cont)])
            _, :done -> Process.put(:stream_done, true)
            _, :halt -> Process.put(:stream_halt, true)
          end}
@@ -233,7 +235,7 @@ defmodule StreamTest do
     Process.put(:stream_each, [])
 
     stream = Stream.each([1, 2, 3], fn x ->
-      Process.put(:stream_each, [x|Process.get(:stream_each)])
+      Process.put(:stream_each, [x | Process.get(:stream_each)])
     end)
 
     assert is_lazy(stream)
@@ -335,7 +337,7 @@ defmodule StreamTest do
   test "flat_map/2 with inner flat_map/2" do
     stream = Stream.flat_map(1..5, fn x ->
       Stream.flat_map([x], fn x ->
-        x .. x * x
+        x..x * x
       end) |> Stream.map(& &1 * 1)
     end)
 
@@ -741,7 +743,7 @@ defmodule StreamTest do
     stream = Stream.take(1..100, -5)
     assert is_lazy(stream)
 
-    stream = Stream.each(stream, &Process.put(:stream_each, [&1|Process.get(:stream_each)]))
+    stream = Stream.each(stream, &Process.put(:stream_each, [&1 | Process.get(:stream_each)]))
     assert Enum.to_list(stream) == [96, 97, 98, 99, 100]
     assert Process.get(:stream_each) == [100, 99, 98, 97, 96]
   end
@@ -888,6 +890,9 @@ defmodule StreamTest do
     stream = Stream.with_index([1, 2, 3])
     assert is_lazy(stream)
     assert Enum.to_list(stream) == [{1, 0}, {2, 1}, {3, 2}]
+
+    stream = Stream.with_index([1, 2, 3], 10)
+    assert Enum.to_list(stream) == [{1, 10}, {2, 11}, {3, 12}]
 
     nats = Stream.iterate(1, &(&1 + 1))
     assert Stream.with_index(nats) |> Enum.take(3) == [{1, 0}, {2, 1}, {3, 2}]

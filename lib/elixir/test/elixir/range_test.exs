@@ -3,6 +3,8 @@ Code.require_file "test_helper.exs", __DIR__
 defmodule RangeTest do
   use ExUnit.Case, async: true
 
+  doctest Range
+
   test "precedence" do
     assert Enum.to_list(1..3+2) == [1, 2, 3, 4, 5]
     assert 1..3 |> Enum.to_list == [1, 2, 3]
@@ -16,6 +18,10 @@ defmodule RangeTest do
   test "range?" do
     assert Range.range?(1..3)
     refute Range.range?(0)
+    assert %Range{first: -10, last: 10} |> Range.range?
+    refute %Range{first: nil, last: 10} |> Range.range?
+    refute %Range{first: -10, last: nil} |> Range.range?
+    refute %Range{} |> Range.range?
   end
 
   test "enum" do

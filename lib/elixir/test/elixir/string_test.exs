@@ -3,6 +3,8 @@ Code.require_file "test_helper.exs", __DIR__
 defmodule StringTest do
   use ExUnit.Case, async: true
 
+  doctest String
+
   test "next codepoint" do
     assert String.next_codepoint("ésoj") == {"é", "soj"}
     assert String.next_codepoint(<<255>>) == {<<255>>, ""}
@@ -10,7 +12,7 @@ defmodule StringTest do
   end
 
   # test cases described in http://mortoray.com/2013/11/27/the-string-type-is-broken/
-  test "unicode" do
+  test "Unicode" do
     assert String.reverse("noël") == "lëon"
     assert String.slice("noël", 0..2) == "noë"
     assert String.length("noël") == 4
@@ -31,8 +33,12 @@ defmodule StringTest do
     assert String.split("foo bar ") == ["foo", "bar"]
     assert String.split(" foo bar ") == ["foo", "bar"]
     assert String.split("foo\t\n\v\f\r\sbar\n") == ["foo", "bar"]
-    assert String.split("foo" <> <<31>> <> "bar") == ["foo", "bar"]
     assert String.split("foo" <> <<194, 133>> <> "bar") == ["foo", "bar"]
+    # information separators are not considered whitespace
+    assert String.split("foo\u001Fbar") == ["foo\u001Fbar"]
+    # no-break space is excluded
+    assert String.split("foo\00A0bar") == ["foo\00A0bar"]
+    assert String.split("foo\u202Fbar") == ["foo\u202Fbar"]
 
     assert String.split("a,b,c", ",") == ["a", "b", "c"]
     assert String.split("a,b", ".") == ["a,b"]
@@ -158,65 +164,153 @@ defmodule StringTest do
     assert String.capitalize("ﬁn") == "Fin"
   end
 
-  test "rstrip" do
-    assert String.rstrip("") == ""
-    assert String.rstrip("1\n") == "1"
-    assert String.rstrip("\r\n") == ""
-    assert String.rstrip("   abc  ") == "   abc"
-    assert String.rstrip("   abc a") == "   abc a"
-    assert String.rstrip("a  abc  a\n\n") == "a  abc  a"
-    assert String.rstrip("a  abc  a\t\n\v\f\r\s") == "a  abc  a"
-    assert String.rstrip("a  abc  a " <> <<31>>) == "a  abc  a"
-    assert String.rstrip("a  abc  a" <> <<194, 133>>) == "a  abc  a"
-    assert String.rstrip("   abc aa", ?a) == "   abc "
-    assert String.rstrip("   abc __", ?_) == "   abc "
-    assert String.rstrip("   cat 猫猫", ?猫) == "   cat "
+  test "replace_leading" do
+    assert String.replace_leading("aa abc   ", "a", "b") == "bb abc   "
+    assert String.replace_leading("__ abc   ", "_", "b") == "bb abc   "
+    assert String.replace_leading("aaaaaaaa ", "a", "b") == "bbbbbbbb "
+    assert String.replace_leading("aaaaaaaa ", "aaa", "b") == "bbaa "
+    assert String.replace_leading("aaaaaaaaa", "a", "b") == "bbbbbbbbb"
+    assert String.replace_leading("]]]]]]", "]", "[]") == "[][][][][][]"
+    assert String.replace_leading("]]]]]]]]", "]", "") == ""
+    assert String.replace_leading("]]]]]] ]", "]", "") == " ]"
+    assert String.replace_leading("猫猫 cat  ", "猫", "й") == "йй cat  "
+    assert String.replace_leading("test", "t", "T") == "Test"
+    assert String.replace_leading("t", "t", "T") == "T"
+    assert String.replace_leading("aaa", "b", "c") == "aaa"
   end
 
-  test "lstrip" do
-    assert String.lstrip("") == ""
-    assert String.lstrip("   abc  ") == "abc  "
-    assert String.lstrip("a  abc  a") == "a  abc  a"
-    assert String.lstrip("\n\na  abc  a") == "a  abc  a"
-    assert String.lstrip("\t\n\v\f\r\sa  abc  a") == "a  abc  a"
-    assert String.lstrip(<<31>> <> " a  abc  a") == "a  abc  a"
-    assert String.lstrip(<<194, 133>> <> "a  abc  a") == "a  abc  a"
-    assert String.lstrip("__  abc  _", ?_) == "  abc  _"
-    assert String.lstrip("猫猫 cat   ", ?猫) == " cat   "
+  test "replace_trailing" do
+    assert String.replace_trailing("   abc aa", "a", "b") == "   abc bb"
+    assert String.replace_trailing("   abc __", "_", "b") == "   abc bb"
+    assert String.replace_trailing(" aaaaaaaa", "a", "b") == " bbbbbbbb"
+    assert String.replace_trailing(" aaaaaaaa", "aaa", "b") == " aabb"
+    assert String.replace_trailing("aaaaaaaaa", "a", "b") == "bbbbbbbbb"
+    assert String.replace_trailing("]]]]]]", "]", "[]") == "[][][][][][]"
+    assert String.replace_trailing("]]]]]]]]", "]", "") == ""
+    assert String.replace_trailing("] ]]]]]]", "]", "") == "] "
+    assert String.replace_trailing("  cat 猫猫", "猫", "й") == "  cat йй"
+    assert String.replace_trailing("test", "t", "T") == "tesT"
+    assert String.replace_trailing("t", "t", "T") == "T"
+    assert String.replace_trailing("aaa", "b", "c") == "aaa"
   end
 
-  test "strip" do
-    assert String.strip("") == ""
-    assert String.strip("   abc  ") == "abc"
-    assert String.strip("a  abc  a\n\n") == "a  abc  a"
-    assert String.strip("a  abc  a\t\n\v\f\r\s") == "a  abc  a"
-    assert String.strip("___  abc  ___", ?_) == "  abc  "
-    assert String.strip("猫猫猫  cat  猫猫猫", ?猫) == "  cat  "
+  test "trim" do
+    assert String.trim("") == ""
+    assert String.trim("  abc ") == "abc"
+    assert String.trim("a  abc  a\n\n") == "a  abc  a"
+    assert String.trim("a  abc  a\t\n\v\f\r\s") == "a  abc  a"
+
+    assert String.trim("___  abc  ___", "_") == "  abc  "
+    assert String.trim("猫猫猫cat猫猫猫", "猫猫") == "猫cat猫"
+    # no-break space
+    assert String.trim("\u00A0a  abc  a\u00A0") == "a  abc  a"
+    # whitespace defined as a range
+    assert String.trim("\u2008a  abc  a\u2005") == "a  abc  a"
   end
 
-  test "rjust" do
-    assert String.rjust("", 5) == "     "
-    assert String.rjust("abc", 5) == "  abc"
-    assert String.rjust("  abc  ", 9) == "    abc  "
-    assert String.rjust("猫", 5) == "    猫"
-    assert String.rjust("abc", 5, ?-) == "--abc"
-    assert String.rjust("abc", 5, ?猫) == "猫猫abc"
-    assert String.rjust("-", 0) == "-"
+  test "trim_leading" do
+    assert String.trim_leading("") == ""
+    assert String.trim_leading("   abc  ") == "abc  "
+    assert String.trim_leading("a  abc  a") == "a  abc  a"
+    assert String.trim_leading("\n\na  abc  a") == "a  abc  a"
+    assert String.trim_leading("\t\n\v\f\r\sa  abc  a") == "a  abc  a"
+    assert String.trim_leading(<<194, 133, "a  abc  a">>) == "a  abc  a"
+    # information separators are not whitespace
+    assert String.trim_leading("\u001F a  abc  a") == "\u001F a  abc  a"
+    # no-break space
+    assert String.trim_leading("\u00A0 a  abc  a") == "a  abc  a"
+
+    assert String.trim_leading("aa aaa", "aaa") == "aa aaa"
+    assert String.trim_leading("aaa aaa", "aa") == "a aaa"
+    assert String.trim_leading("aa abc   ", "a") == " abc   "
+    assert String.trim_leading("__ abc   ", "_") == " abc   "
+    assert String.trim_leading("aaaaaaaaa ", "a") == " "
+    assert String.trim_leading("aaaaaaaaaa", "a") == ""
+    assert String.trim_leading("]]]]]] ]", "]") == " ]"
+    assert String.trim_leading("猫猫 cat   ", "猫") == " cat   "
+    assert String.trim_leading("test", "t") == "est"
+    assert String.trim_leading("t", "t") == ""
+    assert String.trim_leading("", "t") == ""
+  end
+
+  test "trim_trailing" do
+    assert String.trim_trailing("") == ""
+    assert String.trim_trailing("1\n") == "1"
+    assert String.trim_trailing("\r\n") == ""
+    assert String.trim_trailing("   abc  ") == "   abc"
+    assert String.trim_trailing("   abc a") == "   abc a"
+    assert String.trim_trailing("a  abc  a\n\n") == "a  abc  a"
+    assert String.trim_trailing("a  abc  a\t\n\v\f\r\s") == "a  abc  a"
+    assert String.trim_trailing(<<"a  abc  a", 194, 133>>) == "a  abc  a"
+    # information separators are not whitespace
+    assert String.trim_trailing("a  abc  a \u001F") == "a  abc  a \u001F"
+    # no-break space
+    assert String.trim_trailing("a  abc  a \u00A0") == "a  abc  a"
+
+    assert String.trim_trailing("aaa aa", "aaa") == "aaa aa"
+    assert String.trim_trailing("aaa aaa", "aa") == "aaa a"
+    assert String.trim_trailing("   abc aa", "a") == "   abc "
+    assert String.trim_trailing("   abc __", "_") == "   abc "
+    assert String.trim_trailing(" aaaaaaaaa", "a") == " "
+    assert String.trim_trailing("aaaaaaaaaa", "a") == ""
+    assert String.trim_trailing("] ]]]]]]", "]") == "] "
+    assert String.trim_trailing("   cat 猫猫", "猫") == "   cat "
+    assert String.trim_trailing("test", "t") == "tes"
+    assert String.trim_trailing("t", "t") == ""
+    assert String.trim_trailing("", "t") == ""
+  end
+
+  test "pad_leading" do
+    assert String.pad_leading("", 5) == "     "
+    assert String.pad_leading("abc", 5) == "  abc"
+    assert String.pad_leading("  abc  ", 9) == "    abc  "
+    assert String.pad_leading("猫", 5) == "    猫"
+    assert String.pad_leading("-", 0) == "-"
+    assert String.pad_leading("-", 1) == "-"
+
+    assert String.pad_leading("---", 5, "abc") == "ab---"
+    assert String.pad_leading("---", 9, "abc") == "abcabc---"
+
+    assert String.pad_leading("---", 5, ["abc"]) == "abcabc---"
+    assert String.pad_leading("--", 6, ["a", "bc"]) == "abcabc--"
+
     assert_raise FunctionClauseError, fn ->
-      String.rjust("-", -1)
+      String.pad_leading("-", -1)
+    end
+    assert_raise FunctionClauseError, fn ->
+      String.pad_leading("-", 1, [])
+    end
+
+    message = "expected a string padding element, got: 10"
+    assert_raise ArgumentError, message, fn ->
+      String.pad_leading("-", 3, ["-", 10])
     end
   end
 
-  test "ljust" do
-    assert String.ljust("", 5) == "     "
-    assert String.ljust("abc", 5) == "abc  "
-    assert String.ljust("  abc  ", 9) == "  abc    "
-    assert String.ljust("猫", 5) == "猫    "
-    assert String.ljust("abc", 5, ?-) == "abc--"
-    assert String.ljust("abc", 5, ?猫) == "abc猫猫"
-    assert String.ljust("-", 0) == "-"
+  test "pad_trailing" do
+    assert String.pad_trailing("", 5) == "     "
+    assert String.pad_trailing("abc", 5) == "abc  "
+    assert String.pad_trailing("  abc  ", 9) == "  abc    "
+    assert String.pad_trailing("猫", 5) == "猫    "
+    assert String.pad_trailing("-", 0) == "-"
+    assert String.pad_trailing("-", 1) == "-"
+
+    assert String.pad_trailing("---", 5, "abc") == "---ab"
+    assert String.pad_trailing("---", 9, "abc") == "---abcabc"
+
+    assert String.pad_trailing("---", 5, ["abc"]) == "---abcabc"
+    assert String.pad_trailing("--", 6, ["a", "bc"]) == "--abcabc"
+
     assert_raise FunctionClauseError, fn ->
-      String.ljust("-", -1)
+      String.pad_trailing("-", -1)
+    end
+    assert_raise FunctionClauseError, fn ->
+      String.pad_trailing("-", 1, [])
+    end
+
+    message = "expected a string padding element, got: 10"
+    assert_raise ArgumentError, message, fn ->
+      String.pad_trailing("-", 3, ["-", 10])
     end
   end
 
@@ -283,12 +377,43 @@ defmodule StringTest do
   end
 
   test "normalize" do
+    assert String.normalize("ŝ", :nfd) == "ŝ"
     assert String.normalize("ḇravô", :nfd) == "ḇravô"
     assert String.normalize("ṩierra", :nfd) == "ṩierra"
     assert String.normalize("뢴", :nfd) == "뢴"
     assert String.normalize("êchǭ", :nfc) == "êchǭ"
     assert String.normalize("거̄", :nfc) == "거̄"
     assert String.normalize("뢴", :nfc) == "뢴"
+
+    ## Cases from NormalizationTest.txt
+
+    # 05B8 05B9 05B1 0591 05C3 05B0 05AC 059F
+    # 05B1 05B8 05B9 0591 05C3 05B0 05AC 059F
+    # HEBREW POINT QAMATS, HEBREW POINT HOLAM, HEBREW POINT HATAF SEGOL,
+    # HEBREW ACCENT ETNAHTA, HEBREW PUNCTUATION SOF PASUQ, HEBREW POINT SHEVA,
+    # HEBREW ACCENT ILUY, HEBREW ACCENT QARNEY PARA
+    assert String.normalize("ֱָֹ֑׃ְ֬֟", :nfc) == "ֱָֹ֑׃ְ֬֟"
+
+    # 095D (exclusion list)
+    # 0922 093C
+    # DEVANAGARI LETTER RHA
+    assert String.normalize("ढ़", :nfc) == "ढ़"
+
+    # 0061 0315 0300 05AE 0340 0062
+    # 00E0 05AE 0300 0315 0062
+    # LATIN SMALL LETTER A, COMBINING COMMA ABOVE RIGHT, COMBINING GRAVE ACCENT,
+    # HEBREW ACCENT ZINOR, COMBINING GRAVE TONE MARK, LATIN SMALL LETTER B
+    assert String.normalize("à֮̀̕b", :nfc) == "à֮̀̕b"
+
+    # 0344
+    # 0308 0301
+    # COMBINING GREEK DIALYTIKA TONOS
+    assert String.normalize("\u0344", :nfc) == "\u0308\u0301"
+
+    # 115B9 0334 115AF
+    # 115B9 0334 115AF
+    # SIDDHAM VOWEL SIGN AI, COMBINING TILDE OVERLAY, SIDDHAM VOWEL SIGN AA
+    assert String.normalize("𑖹̴𑖯", :nfc) == "𑖹̴𑖯"
   end
 
   test "graphemes" do
@@ -421,15 +546,6 @@ defmodule StringTest do
     refute String.valid?("asd" <> <<0xffff :: 16>>)
   end
 
-  test "valid_character?" do
-    assert String.valid_character?("a")
-    assert String.valid_character?("ø")
-    assert String.valid_character?("あ")
-
-    refute String.valid_character?("\uFFFF")
-    refute String.valid_character?("ab")
-  end
-
   test "chunk valid" do
     assert String.chunk("", :valid) == []
 
@@ -448,7 +564,7 @@ defmodule StringTest do
 
     assert String.chunk("ødskfjあska", :printable)
            == ["ødskfjあska"]
-    assert String.chunk("abc\x{0ffff}def", :printable)
+    assert String.chunk("abc\u{0ffff}def", :printable)
            == ["abc", <<0x0ffff::utf8>>, "def"]
     assert String.chunk("\x06ab\x05cdef\x03\0", :printable)
            == [<<6>>, "ab", <<5>>, "cdef", <<3, 0>>]
@@ -489,18 +605,18 @@ defmodule StringTest do
     refute String.contains? "elixir of life", ["death", "mercury", "eternal life"]
   end
 
-  test "to char list" do
-    assert String.to_char_list("æß")  == [?æ, ?ß]
-    assert String.to_char_list("abc") == [?a, ?b, ?c]
+  test "to charlist" do
+    assert String.to_charlist("æß")  == [?æ, ?ß]
+    assert String.to_charlist("abc") == [?a, ?b, ?c]
 
     assert_raise UnicodeConversionError,
                  "invalid encoding starting at <<223, 255>>", fn ->
-      String.to_char_list(<< 0xDF, 0xFF >>)
+      String.to_charlist(<< 0xDF, 0xFF >>)
     end
 
     assert_raise UnicodeConversionError,
                  "incomplete encoding starting at <<195>>", fn ->
-      String.to_char_list(<< 106, 111, 115, 195 >>)
+      String.to_charlist(<< 106, 111, 115, 195 >>)
     end
   end
 
@@ -536,5 +652,15 @@ defmodule StringTest do
     assert String.jaro_distance("sean", "susan") == 0.7833333333333333
     assert String.jaro_distance("jon", "john") == 0.9166666666666666
     assert String.jaro_distance("jon", "jan") == 0.7777777777777777
+    assert String.jaro_distance("семена", "стремя") == 0.6666666666666666
+  end
+
+  test "difference/2" do
+    assert String.myers_difference("", "abc") == [ins: "abc"]
+    assert String.myers_difference("abc", "") == [del: "abc"]
+    assert String.myers_difference("", "") == []
+    assert String.myers_difference("abc", "abc") == [eq: "abc"]
+    assert String.myers_difference("abc", "aйbc") == [eq: "a", ins: "й", eq: "bc"]
+    assert String.myers_difference("aйbc", "abc") == [eq: "a", del: "й", eq: "bc"]
   end
 end

@@ -4,7 +4,7 @@
 -include("elixir.hrl").
 
 expand_map(Meta, [{'|', UpdateMeta, [Left, Right]}], E) ->
-  {[ELeft|ERight], EA} = elixir_exp:expand_args([Left|Right], E),
+  {[ELeft | ERight], EA} = elixir_exp:expand_args([Left | Right], E),
   validate_kv(Meta, ERight, Right, E),
   {{'%{}', Meta, [{'|', UpdateMeta, [ELeft, ERight]}]}, EA};
 expand_map(Meta, Args, E) ->
@@ -12,14 +12,19 @@ expand_map(Meta, Args, E) ->
   validate_kv(Meta, EArgs, Args, E),
   {{'%{}', Meta, EArgs}, EA}.
 
-expand_struct(Meta, Left, Right, E) ->
+expand_struct(Meta, Left, Right, #{context := Context} = E) ->
   {[ELeft, ERight], EE} = elixir_exp:expand_args([Left, Right], E),
 
-  case is_atom(ELeft) of
-    true ->
+  case validate_struct(ELeft, Context) of
+    true when is_atom(ELeft) ->
       %% We always record structs when they are expanded
       %% as they expect the reference at compile time.
       elixir_lexical:record_remote(ELeft, nil, ?m(E, lexical_tracker));
+    true ->
+      ok;
+    false when Context == match ->
+      compile_error(Meta, ?m(E, file), "expected struct name in a match to be a compile "
+        "time atom, alias or a variable, got: ~ts", ['Elixir.Macro':to_string(ELeft)]);
     false ->
       compile_error(Meta, ?m(E, file), "expected struct name to be a compile "
         "time atom or alias, got: ~ts", ['Elixir.Macro':to_string(ELeft)])
@@ -27,7 +32,7 @@ expand_struct(Meta, Left, Right, E) ->
 
   EMeta =
     case lists:member(ELeft, ?m(E, context_modules)) of
-      true  -> [{struct, context}|Meta];
+      true  -> [{struct, context} | Meta];
       false -> Meta
     end,
 
@@ -39,6 +44,11 @@ expand_struct(Meta, Left, Right, E) ->
   end,
 
   {{'%', EMeta, [ELeft, ERight]}, EE}.
+
+validate_struct({'^', _, [{Var, _, Ctx}]}, match) when is_atom(Var), is_atom(Ctx) -> true;
+validate_struct({Var, _Meta, Ctx}, match) when is_atom(Var), is_atom(Ctx) -> true;
+validate_struct(Atom, _) when is_atom(Atom) -> true;
+validate_struct(_, _) -> false.
 
 validate_kv(Meta, KV, Original, E) ->
   lists:foldl(fun
@@ -52,6 +62,9 @@ validate_kv(Meta, KV, Original, E) ->
 translate_map(Meta, Args, S) ->
   {Assocs, TUpdate, US} = extract_assoc_update(Args, S),
   translate_map(Meta, Assocs, TUpdate, US).
+
+translate_struct(_Meta, Name, {'%{}', MapMeta, Assocs}, S) when is_tuple(Name) ->
+  translate_map(MapMeta, Assocs ++ [{'__struct__', Name}], nil, S);
 
 translate_struct(Meta, Name, {'%{}', MapMeta, Args}, S) ->
   {Assocs, TUpdate, US} = extract_assoc_update(Args, S),
@@ -127,26 +140,11 @@ load_struct(Meta, Name, S) ->
   end.
 
 ensure_loaded(Module) ->
-  case code:ensure_loaded(Module) of
-    {module, Module} -> true;
-    {error, _} -> false
-  end.
+  code:ensure_loaded(Module) == {module, Module}.
 
 wait_for_struct(Module) ->
-  case erlang:get(elixir_compiler_pid) of
-    undefined ->
-      false;
-    Pid ->
-      Ref = erlang:make_ref(),
-      Pid ! {waiting, struct, self(), Ref, Module},
-      receive
-        {Ref, ready} ->
-          true;
-        {Ref, release} ->
-          'Elixir.Kernel.ErrorHandler':release(),
-          false
-      end
-  end.
+  is_pid(erlang:get(elixir_compiler_pid)) andalso
+    'Elixir.Kernel.ErrorHandler':ensure_compiled(Module, struct).
 
 translate_map(Meta, Assocs, TUpdate, #elixir_scope{extra=Extra} = S) ->
   {Op, KeyFun, ValFun} = extract_key_val_op(TUpdate, S),

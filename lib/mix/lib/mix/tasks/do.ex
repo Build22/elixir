@@ -18,26 +18,33 @@ defmodule Mix.Tasks.Do do
   @spec run(OptionParser.argv) :: :ok
   def run(args) do
     Enum.each gather_commands(args), fn
-      [task|args] -> Mix.Task.run task, args
-      [] -> Mix.raise "No expression between commas"
+      [task | args] -> Mix.Task.run task, args
     end
   end
 
-  defp gather_commands(args) do
-    gather_commands args, [], []
+  @doc false
+  def gather_commands(args) do
+    gather_commands(args, [], [])
   end
 
-  defp gather_commands([h|t], current, acc) when binary_part(h, byte_size(h), -1) == "," do
-    part    = binary_part(h, 0, byte_size(h) - 1)
-    current = Enum.reverse([part|current])
-    gather_commands t, [], [current|acc]
+  defp gather_commands([], current, commands) do
+    [current | commands]
+    |> Enum.reject(&(&1 == []))
+    |> Enum.map(&Enum.reverse(&1))
+    |> Enum.reverse
   end
 
-  defp gather_commands([h|t], current, acc) do
-    gather_commands t, [h|current], acc
+  defp gather_commands([arg | rest], current, commands) do
+    case String.split(arg, ",", parts: 2) do
+      [arg] ->
+        gather_commands(rest, [arg | current], commands)
+      [left, right] ->
+        rest    = append_unless_empty(right, rest)
+        current = append_unless_empty(left, current)
+        gather_commands(rest, [], [current | commands])
+    end
   end
 
-  defp gather_commands([], current, acc) do
-    Enum.reverse [Enum.reverse(current)|acc]
-  end
+  defp append_unless_empty("", list), do: list
+  defp append_unless_empty(h, list),  do: [h | list]
 end

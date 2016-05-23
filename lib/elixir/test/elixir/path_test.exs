@@ -2,6 +2,9 @@ Code.require_file "test_helper.exs", __DIR__
 
 defmodule PathTest do
   use ExUnit.Case, async: true
+
+  doctest Path
+
   import PathHelpers
 
   if :file.native_name_encoding == :utf8 do
@@ -42,8 +45,10 @@ defmodule PathTest do
       assert Path.relative_to("D:/usr/local/foo", "D:/usr/") == "local/foo"
       assert Path.relative_to("D:/usr/local/foo", "d:/usr/") == "local/foo"
       assert Path.relative_to("d:/usr/local/foo", "D:/usr/") == "local/foo"
-      assert Path.relative_to("D:/usr/local/foo", "d:") == "usr/local/foo"
-      assert Path.relative_to("D:/usr/local/foo", "D:") == "usr/local/foo"
+      assert Path.relative_to("D:/usr/local/foo", "d:/") == "usr/local/foo"
+      assert Path.relative_to("D:/usr/local/foo", "D:/") == "usr/local/foo"
+      assert Path.relative_to("D:/usr/local/foo", "d:") == "D:/usr/local/foo"
+      assert Path.relative_to("D:/usr/local/foo", "D:") == "D:/usr/local/foo"
     end
 
     test "type win" do
@@ -87,8 +92,8 @@ defmodule PathTest do
     assert Path.relative_to_cwd(__ENV__.file) ==
            Path.relative_to(__ENV__.file, System.cwd!)
 
-    assert Path.relative_to_cwd(to_char_list(__ENV__.file)) ==
-           Path.relative_to(to_char_list(__ENV__.file), to_char_list(System.cwd!))
+    assert Path.relative_to_cwd(to_charlist(__ENV__.file)) ==
+           Path.relative_to(to_charlist(__ENV__.file), to_charlist(System.cwd!))
   end
 
   test "absname" do
@@ -108,7 +113,7 @@ defmodule PathTest do
   end
 
   test "expand path with user home" do
-    home = System.user_home!
+    home = System.user_home! |> Path.absname
 
     assert home == Path.expand("~")
     assert home == Path.expand('~')
@@ -124,8 +129,10 @@ defmodule PathTest do
 
   test "expand path" do
     assert (Path.expand("/") |> strip_drive_letter_if_windows) == "/"
+    assert (Path.expand("/foo/../..") |> strip_drive_letter_if_windows) == "/"
     assert (Path.expand("/foo") |> strip_drive_letter_if_windows) == "/foo"
     assert (Path.expand("/./foo") |> strip_drive_letter_if_windows) == "/foo"
+    assert (Path.expand("/../foo") |> strip_drive_letter_if_windows) == "/foo"
     assert (Path.expand("/foo/bar") |> strip_drive_letter_if_windows) == "/foo/bar"
     assert (Path.expand("/foo/bar/") |> strip_drive_letter_if_windows) == "/foo/bar"
     assert (Path.expand("/foo/bar/.") |> strip_drive_letter_if_windows)== "/foo/bar"
@@ -202,6 +209,8 @@ defmodule PathTest do
     assert Path.join(["/", "foo", "bar"]) == "/foo/bar"
     assert Path.join(["~", "foo", "bar"]) == "~/foo/bar"
     assert Path.join(['/foo/', "/bar/"]) == "/foo/bar"
+    assert Path.join(["/", ""]) == "/"
+    assert Path.join(["/", "", "bar"]) == "/bar"
   end
 
   test "join two" do
@@ -229,7 +238,7 @@ defmodule PathTest do
   end
 
   if windows? do
-    defp strip_drive_letter_if_windows([_d, ?:|rest]), do: rest
+    defp strip_drive_letter_if_windows([_d, ?: | rest]), do: rest
     defp strip_drive_letter_if_windows(<<_d, ?:, rest::binary>>), do: rest
   else
     defp strip_drive_letter_if_windows(path), do: path

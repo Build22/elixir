@@ -2,11 +2,14 @@ Code.require_file "test_helper.exs", __DIR__
 
 defmodule CodeTest do
   use ExUnit.Case, async: true
+
+  doctest Code
+
   import PathHelpers
 
   def genmodule(name) do
     defmodule name do
-      Kernel.LexicalTracker.remotes(__MODULE__)
+      Kernel.LexicalTracker.remote_references(__MODULE__)
     end
   end
 
@@ -120,7 +123,7 @@ defmodule CodeTest do
   end
 
   test "compile source" do
-    assert __MODULE__.__info__(:compile)[:source] == String.to_char_list(__ENV__.file)
+    assert __MODULE__.__info__(:compile)[:source] == String.to_charlist(__ENV__.file)
   end
 
   test "compile info returned with source accessible through keyword module" do
@@ -151,12 +154,12 @@ defmodule CodeTest do
 
   test "ensure_loaded?" do
     assert Code.ensure_loaded?(__MODULE__)
-    refute Code.ensure_loaded?(Unknown.Module)
+    refute Code.ensure_loaded?(Code.NoFile)
   end
 
   test "ensure_compiled?" do
     assert Code.ensure_compiled?(__MODULE__)
-    refute Code.ensure_compiled?(Unknown.Module)
+    refute Code.ensure_compiled?(Code.NoFile)
   end
 end
 
@@ -166,9 +169,9 @@ defmodule Code.SyncTest do
   test "path manipulation" do
     path = Path.join(__DIR__, "fixtures")
     Code.prepend_path path
-    assert to_char_list(path) in :code.get_path
+    assert to_charlist(path) in :code.get_path
 
     Code.delete_path path
-    refute to_char_list(path) in :code.get_path
+    refute to_charlist(path) in :code.get_path
   end
 end

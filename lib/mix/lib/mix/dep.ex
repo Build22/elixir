@@ -23,7 +23,7 @@ defmodule Mix.Dep do
     * `top_level` - true if dependency was defined in the top-level project
 
     * `manager` - the project management, possible values:
-      `:rebar` | `:mix` | `:make` | `nil`
+      `:rebar` | `:rebar3` | `:mix` | `:make` | `nil`
 
     * `from` - path to the file where the dependency was defined
 
@@ -53,26 +53,32 @@ defmodule Mix.Dep do
   @type t :: %__MODULE__{
                scm: module,
                app: atom,
-               requirement: String.t | Regex.t,
+               requirement: String.t | Regex.t | nil,
                status: atom,
                opts: Keyword.t,
                top_level: boolean,
-               manager: :rebar | :mix | :make | nil,
+               manager: :rebar | :rebar3 | :mix | :make | nil,
                from: String.t,
                extra: term}
 
   @doc """
-  Returns all children dependencies for the current project,
-  as well as the defined apps in case of umbrella projects.
-  The children dependencies returned by this function were
-  not loaded yet.
+  Returns loaded dependencies from the cache for the current environment.
 
-  ## Exceptions
-
-  This function raises an exception if any of the dependencies
-  provided in the project are in the wrong format.
+  Because the dependencies are cached during deps.check, their
+  status may be outdated (for example, `:compile` did not
+  yet become `:ok`). Therefore it is recommended to not rely
+  on the their status, also given they haven't been checked
+  against the lock.
   """
-  defdelegate children(), to: Mix.Dep.Loader
+  def cached do
+    if project = Mix.Project.get do
+      key = {:cached_deps, project}
+      Mix.ProjectStack.read_cache(key) ||
+        Mix.ProjectStack.write_cache(key, loaded(env: Mix.env))
+    else
+      loaded(env: Mix.env)
+    end
+  end
 
   @doc """
   Returns loaded dependencies recursively as a `Mix.Dep` struct.
@@ -100,9 +106,12 @@ defmodule Mix.Dep do
 
     # Ensure all apps are atoms
     apps = to_app_names(given)
-
-    # We need to keep the order of deps, loaded/1 properly orders them
-    deps = Enum.filter(all_deps, &(&1.app in apps))
+    deps =
+      if opts[:include_children] do
+        get_deps_with_children(all_deps, apps)
+      else
+        get_deps(all_deps, apps)
+      end
 
     Enum.each apps, fn(app) ->
       unless Enum.any?(all_deps, &(&1.app == app)) do
@@ -111,6 +120,30 @@ defmodule Mix.Dep do
     end
 
     deps
+  end
+
+  defp get_deps(all_deps, apps) do
+    Enum.filter(all_deps, &(&1.app in apps))
+  end
+
+  defp get_deps_with_children(all_deps, apps) do
+    deps = get_children(all_deps, apps)
+    apps = deps |> Enum.map(& &1.app) |> Enum.uniq
+    get_deps(all_deps, apps)
+  end
+
+  defp get_children(_all_deps, []), do: []
+  defp get_children(all_deps, apps) do
+    # Current deps
+    deps = get_deps(all_deps, apps)
+
+    # Children apps
+    apps = for %{deps: children} <- deps,
+               %{app: app} <- children,
+               do: app
+
+    # Current deps + children deps
+    deps ++ get_children(all_deps, apps)
   end
 
   @doc """
@@ -161,6 +194,11 @@ defmodule Mix.Dep do
   def format_status(%Mix.Dep{status: {:invalidvsn, vsn}}),
     do: "the app file contains an invalid version: #{inspect vsn}"
 
+  def format_status(%Mix.Dep{status: {:nosemver, vsn}, requirement: req}),
+    do: "the app file specified a non Semantic Version: #{inspect vsn}. Mix can only match the " <>
+        "requirement #{inspect req} against Semantic Versions. Please fix the application version " <>
+        "or use a regex as a requirement to match against any version"
+
   def format_status(%Mix.Dep{status: {:nomatchvsn, vsn}, requirement: req}),
     do: "the dependency does not match the requirement #{inspect req}, got #{inspect vsn}"
 
@@ -176,8 +214,8 @@ defmodule Mix.Dep do
   def format_status(%Mix.Dep{status: :compile}),
     do: "the dependency build is outdated, please run \"#{mix_env_var}mix deps.compile\""
 
-  def format_status(%Mix.Dep{app: app, status: {:divergedreq, other}} = dep) do
-    "the dependency #{app}\n" <>
+  def format_status(%Mix.Dep{app: app, status: {:divergedreq, vsn, other}} = dep) do
+    "the dependency #{app} #{vsn}\n" <>
     "#{dep_status(dep)}" <>
     "\n  does not match the requirement specified\n" <>
     "#{dep_status(other)}" <>
@@ -225,32 +263,30 @@ defmodule Mix.Dep do
   def format_status(%Mix.Dep{status: {:scmlock, _}}),
     do: "the dependency was built with another SCM, run \"#{mix_env_var}mix deps.compile\""
 
-  defp dep_status(%Mix.Dep{app: app, requirement: req, opts: opts, from: from}) do
-    info = {app, req, Keyword.drop(opts, [:dest, :lock, :env, :build])}
+  defp dep_status(%Mix.Dep{app: app, requirement: req, manager: manager, opts: opts, from: from}) do
+    opts = Keyword.drop(opts, [:dest, :build, :lock, :manager])
+    opts = opts ++ (if manager, do: [manager: manager], else: [])
+    info = if req, do: {app, req, opts}, else: {app, opts}
     "\n  > In #{Path.relative_to_cwd(from)}:\n    #{inspect info}\n"
   end
 
   @doc """
   Checks the lock for the given dependency and update its status accordingly.
   """
-  def check_lock(%Mix.Dep{scm: scm, app: app, opts: opts} = dep, lock) do
-    if rev = lock[app] do
-      opts = Keyword.put(opts, :lock, rev)
-    end
-
+  def check_lock(%Mix.Dep{scm: scm, opts: opts} = dep) do
     if available?(dep) do
       case scm.lock_status(opts) do
         :mismatch ->
-          status = if rev, do: {:lockmismatch, rev}, else: :nolock
-          %{dep | status: status, opts: opts}
+          status = if rev = opts[:lock], do: {:lockmismatch, rev}, else: :nolock
+          %{dep | status: status}
         :outdated ->
           # Don't include the lock in the dependency if it is outdated
           %{dep | status: :lockoutdated}
         :ok ->
-          check_manifest(%{dep | opts: opts}, opts[:build])
+          check_manifest(dep, opts[:build])
       end
     else
-      %{dep | opts: opts}
+      dep
     end
   end
 
@@ -268,60 +304,27 @@ defmodule Mix.Dep do
   end
 
   @doc """
-  Partition the given dependencies in "not ok" and "compilable".
-  """
-  def partition(deps) do
-    partition(deps, [], [])
-  end
-
-  defp partition([dep|deps], not_ok, compile) do
-    cond do
-      from_umbrella?(dep)      -> partition(deps, not_ok, compile)
-      compilable?(dep)         -> partition(deps, not_ok, [dep|compile])
-      ok?(dep) and local?(dep) -> partition(deps, not_ok, [dep|compile])
-      ok?(dep)                 -> partition(deps, not_ok, compile)
-      true                     -> partition(deps, [dep|not_ok], compile)
-    end
-  end
-
-  defp partition([], not_ok, compile) do
-    {Enum.reverse(not_ok), Enum.reverse(compile)}
-  end
-
-  # Those are compiled by umbrella.
-  defp from_umbrella?(dep) do
-    dep.opts[:from_umbrella]
-  end
-
-  # Every local dependency (i.e. that are not fetchable)
-  # are automatically recompiled if they are ok.
-  defp local?(dep) do
-    not dep.scm.fetchable?
-  end
-
-  # Can the dependency be compiled automatically without user intervention?
-  defp compilable?(%Mix.Dep{status: {:elixirlock, _}}), do: true
-  defp compilable?(%Mix.Dep{status: {:noappfile, _}}), do: true
-  defp compilable?(%Mix.Dep{status: {:scmlock, _}}), do: true
-  defp compilable?(%Mix.Dep{status: :compile}), do: true
-  defp compilable?(%Mix.Dep{}), do: false
-
-  @doc """
   Returns `true` if the dependency is ok.
   """
   def ok?(%Mix.Dep{status: {:ok, _}}), do: true
   def ok?(%Mix.Dep{}), do: false
 
   @doc """
-  Checks if a dependency is available. Available dependencies
-  are the ones that can be loaded.
+  Checks if a dependency is available.
+
+  Available dependencies are the ones that can be loaded.
   """
-  def available?(%Mix.Dep{status: {:unavailable, _}}),  do: false
-  def available?(%Mix.Dep{status: {:overridden, _}}),   do: false
-  def available?(%Mix.Dep{status: {:diverged, _}}),     do: false
-  def available?(%Mix.Dep{status: {:divergedreq, _}}),  do: false
-  def available?(%Mix.Dep{status: {:divergedonly, _}}), do: false
-  def available?(%Mix.Dep{}), do: true
+  def available?(%Mix.Dep{status: {:unavailable, _}}), do: false
+  def available?(dep), do: not diverged?(dep)
+
+  @doc """
+  Checks if a dependency has diverged.
+  """
+  def diverged?(%Mix.Dep{status: {:overridden, _}}),   do: true
+  def diverged?(%Mix.Dep{status: {:diverged, _}}),     do: true
+  def diverged?(%Mix.Dep{status: {:divergedreq, _}}),  do: true
+  def diverged?(%Mix.Dep{status: {:divergedonly, _}}), do: true
+  def diverged?(%Mix.Dep{}), do: false
 
   @doc """
   Formats a dependency for printing.
@@ -343,8 +346,8 @@ defmodule Mix.Dep do
   """
   def load_paths(%Mix.Dep{opts: opts} = dep) do
     build_path = Path.dirname(opts[:build])
-    Enum.map source_paths(dep), fn path ->
-      Path.join [build_path, Path.basename(path), "ebin"]
+    Enum.map source_paths(dep), fn {_, base} ->
+      Path.join [build_path, base, "ebin"]
     end
   end
 
@@ -354,20 +357,20 @@ defmodule Mix.Dep do
   Source paths are the directories that contains ebin files for a given
   dependency. All managers, except `:rebar`, have only one source path.
   """
-  def source_paths(%Mix.Dep{manager: :rebar, opts: opts, extra: extra}) do
-    # Add root dir and all sub dirs with ebin/ directory
-    sub_dirs = Enum.map(extra[:sub_dirs] || [], fn path ->
-      Path.join(opts[:dest], path)
-    end)
+  def source_paths(%Mix.Dep{manager: :rebar, app: app, opts: opts, extra: extra}) do
+    sub_dirs = extra[:sub_dirs] || []
+    dest = opts[:dest]
 
-    [opts[:dest] | sub_dirs]
-    |> Enum.map(&Path.wildcard(&1))
-    |> Enum.concat
-    |> Enum.filter(fn p -> p |> Path.join("ebin") |> File.dir? end)
+    # Add root dir and all sub dirs with ebin/ directory
+    [{opts[:dest], Atom.to_string(app)}] ++
+      for(sub_dir <- sub_dirs,
+          path <- Path.wildcard(Path.join(dest, sub_dir)),
+          File.dir?(Path.join(path, "ebin")),
+          do: {path, Path.basename(path)})
   end
 
-  def source_paths(%Mix.Dep{opts: opts}) do
-    [opts[:dest]]
+  def source_paths(%Mix.Dep{app: app, opts: opts}) do
+    [{opts[:dest], Atom.to_string(app)}]
   end
 
   @doc """
@@ -381,7 +384,7 @@ defmodule Mix.Dep do
   Returns `true` if dependency is a rebar project.
   """
   def rebar?(%Mix.Dep{manager: manager}) do
-    manager == :rebar
+    manager in [:rebar, :rebar3]
   end
 
   @doc """

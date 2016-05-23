@@ -24,7 +24,7 @@ defmodule Kernel.FnTest do
 
   test "capture remote" do
     assert (&:erlang.atom_to_list/1).(:a) == 'a'
-    assert (&Atom.to_char_list/1).(:a) == 'a'
+    assert (&Atom.to_charlist/1).(:a) == 'a'
 
     assert (&List.flatten/1).([[0]]) == [0]
     assert (&(List.flatten/1)).([[0]]) == [0]
@@ -102,7 +102,7 @@ defmodule Kernel.FnTest do
     assert (&[ 1, &1 ]).(2) == [ 1, 2 ]
     assert (&[ 1, &1, &2 ]).(2, 3) == [ 1, 2, 3 ]
 
-    assert (&[&1|&2]).(1, 2) == [1|2]
+    assert (&[&1 | &2]).(1, 2) == [1 | 2]
   end
 
   test "capture and partially apply on call" do
@@ -122,6 +122,7 @@ defmodule Kernel.FnTest do
 
   test "failure on non-continuous" do
     assert_compile_fail CompileError, "nofile:1: capture &2 cannot be defined without &1", "&(&2)"
+    assert_compile_fail CompileError, "nofile:1: capture &255 cannot be defined without &1", "&(&255)"
   end
 
   test "failure on integers" do
@@ -154,6 +155,12 @@ defmodule Kernel.FnTest do
       "nofile:1: invalid args for &, expected an expression in the format of &Mod.fun/arity, " <>
       "&local/arity or a capture containing at least one argument as &1, got: foo()",
       "&foo()"
+  end
+
+  test "failure on nested capture" do
+    assert_compile_fail CompileError,
+      "nofile:1: nested captures via & are not allowed: &(nil)",
+      "&(&())"
   end
 
   defp is_a?(:atom, atom) when is_atom(atom), do: true

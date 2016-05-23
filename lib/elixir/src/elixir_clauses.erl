@@ -33,7 +33,8 @@ match(Fun, Args, S) -> Fun(Args, S).
 
 clause(Meta, Fun, Args, Expr, Guards, S) when is_list(Meta) ->
   {TArgs, SA} = match(Fun, Args, S#elixir_scope{extra_guards=[]}),
-  {TExpr, SE} = elixir_translator:translate(Expr, SA#elixir_scope{extra_guards=nil}),
+  {TExpr, SE} = elixir_translator:translate(Expr,
+                  SA#elixir_scope{extra_guards=nil, export_vars=S#elixir_scope.export_vars}),
 
   Extra = SA#elixir_scope.extra_guards,
   TGuards = guards(Guards, Extra, SA),
@@ -50,17 +51,17 @@ guards(Guards, Extra, S) ->
   end.
 
 translate_guard(Guard, Extra, S) ->
-  [element(1, elixir_translator:translate(Guard, S))|Extra].
+  [element(1, elixir_translator:translate(Guard, S)) | Extra].
 
 extract_guards({'when', _, [Left, Right]}) -> {Left, extract_or_guards(Right)};
 extract_guards(Else) -> {Else, []}.
 
-extract_or_guards({'when', _, [Left, Right]}) -> [Left|extract_or_guards(Right)];
+extract_or_guards({'when', _, [Left, Right]}) -> [Left | extract_or_guards(Right)];
 extract_or_guards(Term) -> [Term].
 
 % Extract guards when multiple left side args are allowed.
 
-extract_splat_guards([{'when', _, [_, _|_] = Args}]) ->
+extract_splat_guards([{'when', _, [_, _ | _] = Args}]) ->
   {Left, Right} = elixir_utils:split_last(Args),
   {Left, extract_or_guards(Right)};
 extract_splat_guards(Else) ->
@@ -79,8 +80,8 @@ do_clauses(Meta, DecoupledClauses, S) ->
   % Transform tree just passing the variables counter forward
   % and storing variables defined inside each clause.
   Transformer = fun(X, {SAcc, VAcc}) ->
-    {TX, TS} = each_clause(Meta, X, SAcc),
-    {TX, {elixir_scope:mergec(S, TS), [TS#elixir_scope.export_vars|VAcc]}}
+    {TX, TS} = each_clause(X, SAcc),
+    {TX, {elixir_scope:mergec(S, TS), [TS#elixir_scope.export_vars | VAcc]}}
   end,
 
   {TClauses, {TS, ReverseCV}} =
@@ -103,14 +104,14 @@ do_clauses(Meta, DecoupledClauses, S) ->
   % that defines variables missing in one clause to the others.
   expand_clauses(?ann(Meta), TClauses, CV, FinalVars, [], FS).
 
-expand_clauses(Ann, [Clause|T], [ClauseVars|V], FinalVars, Acc, S) ->
+expand_clauses(Ann, [Clause | T], [ClauseVars | V], FinalVars, Acc, S) ->
   case generate_match_vars(FinalVars, ClauseVars, [], []) of
     {[], []} ->
-      expand_clauses(Ann, T, V, FinalVars, [Clause|Acc], S);
+      expand_clauses(Ann, T, V, FinalVars, [Clause | Acc], S);
     {Left, Right} ->
       MatchExpr   = generate_match(Ann, Left, Right),
       ClauseExprs = element(5, Clause),
-      [Final|RawClauseExprs] = lists:reverse(ClauseExprs),
+      [Final | RawClauseExprs] = lists:reverse(ClauseExprs),
 
       % If the last sentence has a match clause, we need to assign its value
       % in the variable list. If not, we insert the variable list before the
@@ -119,19 +120,19 @@ expand_clauses(Ann, [Clause|T], [ClauseVars|V], FinalVars, Acc, S) ->
         true ->
           case Final of
             {match, _, {var, _, UserVarName} = UserVar, _} when UserVarName /= '_' ->
-              {[UserVar, MatchExpr, Final|RawClauseExprs], S};
+              {[UserVar, MatchExpr, Final | RawClauseExprs], S};
             _ ->
               {VarName, _, SS} = elixir_scope:build_var('_', S),
               StorageVar  = {var, Ann, VarName},
               StorageExpr = {match, Ann, StorageVar, Final},
-              {[StorageVar, MatchExpr, StorageExpr|RawClauseExprs], SS}
+              {[StorageVar, MatchExpr, StorageExpr | RawClauseExprs], SS}
           end;
         false ->
-          {[Final, MatchExpr|RawClauseExprs], S}
+          {[Final, MatchExpr | RawClauseExprs], S}
       end,
 
       FinalClause = setelement(5, Clause, lists:reverse(FinalClauseExprs)),
-      expand_clauses(Ann, T, V, FinalVars, [FinalClause|Acc], FS)
+      expand_clauses(Ann, T, V, FinalVars, [FinalClause | Acc], FS)
   end;
 
 expand_clauses(_Ann, [], [], _FinalVars, Acc, S) ->
@@ -139,26 +140,14 @@ expand_clauses(_Ann, [], [], _FinalVars, Acc, S) ->
 
 % Handle each key/value clause pair and translate them accordingly.
 
-each_clause(Export, {match, Meta, [Condition], Expr}, S) ->
-  Fun = wrap_export_fun(Export, fun elixir_translator:translate_args/2),
+each_clause({match, Meta, [Condition], Expr}, S) ->
   {Arg, Guards} = extract_guards(Condition),
-  clause(Meta, Fun, [Arg], Expr, Guards, S);
+  clause(Meta, fun elixir_translator:translate_args/2, [Arg], Expr, Guards, S);
 
-each_clause(Export, {expr, Meta, [Condition], Expr}, S) ->
-  {TCondition, SC} = (wrap_export_fun(Export, fun elixir_translator:translate/2))(Condition, S),
-  {TExpr, SB} = elixir_translator:translate(Expr, SC),
+each_clause({expr, Meta, [Condition], Expr}, S) ->
+  {TCondition, SC} = elixir_translator:translate(Condition, S),
+  {TExpr, SB} = elixir_translator:translate(Expr, SC#elixir_scope{export_vars = S#elixir_scope.export_vars}),
   {{clause, ?ann(Meta), [TCondition], [], unblock(TExpr)}, SB}.
-
-wrap_export_fun(Meta, Fun) ->
-  case lists:keyfind(export_head, 1, Meta) of
-    {export_head, true} ->
-      Fun;
-    _ ->
-      fun(Args, S) ->
-        {TArgs, TS} = Fun(Args, S),
-        {TArgs, TS#elixir_scope{export_vars = S#elixir_scope.export_vars}}
-      end
-  end.
 
 % Check if the given expression is a match tuple.
 % This is a small optimization to allow us to change
@@ -184,33 +173,42 @@ has_match_tuple(_) -> false.
 % by picking one value as reference and retrieving
 % its previous value.
 
-normalize_vars(Key, Value, #elixir_scope{vars=Vars, export_vars=ClauseVars} = S) ->
+normalize_vars(Key, {Ref, Counter, _Safe},
+               #elixir_scope{vars=Vars, export_vars=ClauseVars} = S) ->
+  Expr =
+    case maps:find(Key, Vars) of
+      {ok, {PrevRef, _, _}} ->
+        {var, 0, PrevRef};
+      error ->
+        {atom, 0, nil}
+    end,
+
+  %% TODO: Unsafe vars should raise in future versions.
+  %% When we do so, we can unify the export vars mechanism.
+  %% For v2.0, we will never export them (or always raise in case/cond/try).
+  Value = {Ref, Counter, false},
+
   VS = S#elixir_scope{
     vars=maps:put(Key, Value, Vars),
     export_vars=maps:put(Key, Value, ClauseVars)
   },
-
-  Expr = case maps:find(Key, Vars) of
-    {ok, {PreValue, _}} -> {var, 0, PreValue};
-    error -> {atom, 0, nil}
-  end,
 
   {{Key, Value, Expr}, VS}.
 
 % Generate match vars by checking if they were updated
 % or not and assigning the previous value.
 
-generate_match_vars([{Key, Value, Expr}|T], ClauseVars, Left, Right) ->
+generate_match_vars([{Key, Value, Expr} | T], ClauseVars, Left, Right) ->
   case maps:find(Key, ClauseVars) of
     {ok, Value} ->
       generate_match_vars(T, ClauseVars, Left, Right);
     {ok, Clause} ->
       generate_match_vars(T, ClauseVars,
-        [{var, 0, element(1, Value)}|Left],
-        [{var, 0, element(1, Clause)}|Right]);
+        [{var, 0, element(1, Value)} | Left],
+        [{var, 0, element(1, Clause)} | Right]);
     error ->
       generate_match_vars(T, ClauseVars,
-        [{var, 0, element(1, Value)}|Left], [Expr|Right])
+        [{var, 0, element(1, Value)} | Left], [Expr | Right])
   end;
 
 generate_match_vars([], _ClauseVars, Left, Right) ->

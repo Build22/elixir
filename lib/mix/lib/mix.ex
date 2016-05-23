@@ -152,6 +152,24 @@ defmodule Mix do
   with extra clean up logic.
 
   Note aliases do not show up on `mix help`.
+
+  ## Environment variables
+
+  Environment variables can be used to modify Mix behaviour.
+
+  Mix responds to the following variables:
+
+    * `MIX_ARCHIVES` - allows specifying the directory into which the archives should be installed
+    * `MIX_DEBUG`    - outputs debug information about each task before running it
+    * `MIX_ENV`      - allows specifying which environment should be used. see Environments
+    * `MIX_EXS`      - allows changing the full path to the `mix.exs` file
+    * `MIX_HOME`     - stores configuration files and scripts shared by multiple implementations
+    * `MIX_PATH`     - allows expanding the code path
+    * `MIX_QUIET`    - does not print information messages to the terminal
+
+  Variables which do not take a value should be set to either `1` or `true`, for example:
+
+      $ MIX_DEBUG=1 mix compile
   """
 
   use Application
@@ -206,7 +224,7 @@ defmodule Mix do
 
   """
   def compilers do
-    [:yecc, :leex, :erlang, :elixir, :app]
+    [:yecc, :leex, :erlang, :elixir, :xref, :app]
   end
 
   @doc """
@@ -235,21 +253,24 @@ defmodule Mix do
   end
 
   @doc """
-  Raises a Mix error that is nicely formatted.
+  Returns true if Mix is in debug mode.
   """
-  def raise(message) when is_binary(message) do
-    Kernel.raise Mix.Error, mix: true, message: message
+  def debug? do
+    Mix.State.get(:debug, false)
   end
 
   @doc """
-  Raises a Mix compatible exception.
-
-  A Mix compatible exception contains a special field called
-  `:mix` that is used to store the current project or application
-  name. This information is used by modules like `Mix.CLI` to
-  properly format and show information to the user.
+  Sets Mix debug mode.
   """
-  def raise(exception, opts) when is_atom(exception) do
-    Kernel.raise %{exception.exception(opts) | mix: true}
+  def debug(debug) when is_boolean(debug) do
+    Mix.State.put(:debug, debug)
+  end
+
+  @doc """
+  Raises a Mix error that is nicely formatted.
+  """
+  @spec raise(binary) :: no_return
+  def raise(message) when is_binary(message) do
+    Kernel.raise Mix.Error, mix: true, message: message
   end
 end

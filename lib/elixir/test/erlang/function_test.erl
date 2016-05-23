@@ -10,10 +10,6 @@ function_arg_do_end_test() ->
   {nil, _} = eval("if true do end").
 
 function_stab_end_test() ->
-  {_, [{a, Fun1}]} = eval("a = fn -> end"),
-  nil = Fun1(),
-  {_, [{a, Fun2}]} = eval("a = fn() -> end"),
-  nil = Fun2(),
   {_, [{a, Fun3}]} = eval("a = fn -> 1 + 2 end"),
   3 = Fun3().
 
@@ -36,7 +32,7 @@ function_with_kv_args_test() ->
   6 = Fun(1, [{other, 2}, {another, 3}]).
 
 function_as_closure_test() ->
-  {_, [{a, Res1}|_]} = eval("b = 1; a = fn -> b + 2 end"),
+  {_, [{a, Res1} | _]} = eval("b = 1; a = fn -> b + 2 end"),
   3 = Res1().
 
 function_apply_test() ->

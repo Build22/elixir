@@ -44,9 +44,9 @@ defmodule URI do
   @doc """
   Encodes an enumerable into a query string.
 
-  Takes an enumerable (containing a sequence of two-item tuples)
-  and returns a string of the form "key1=value1&key2=value2..." where
-  keys and values are URL encoded as per `encode/2`.
+  Takes an enumerable (containing a sequence of two-element tuples)
+  and returns a string in the form of `key1=value1&key2=value2...` where
+  keys and values are URL encoded as per `encode_www_form/1`.
 
   Keys and values can be any term that implements the `String.Chars`
   protocol, except lists which are explicitly forbidden.
@@ -57,13 +57,17 @@ defmodule URI do
       iex> URI.encode_query(hd)
       "bar=2&foo=1"
 
+      iex> query = %{"key" => "value with spaces"}
+      iex> URI.encode_query(query)
+      "key=value+with+spaces"
+
   """
   def encode_query(l), do: Enum.map_join(l, "&", &pair/1)
 
   @doc """
-  Decodes a query string into a dictionary (by default uses a map).
+  Decodes a query string into a map.
 
-  Given a query string of the form "key1=value1&key2=value2...", produces a
+  Given a query string of the form of `key1=value1&key2=value2...`, produces a
   map with one entry for each key-value pair. Each key and value will be a
   binary. Keys and values will be percent-unescaped.
 
@@ -75,11 +79,33 @@ defmodule URI do
       %{"bar" => "2", "foo" => "1"}
 
   """
-  # TODO: Deprecate giving not a map on 1.3
-  def decode_query(q, dict \\ %{}) when is_binary(q) do
+  def decode_query(q, map \\ %{})
+
+  def decode_query(q, %{__struct__: _} = dict) when is_binary(q) do
+    IO.warn "URI.decode_query/2 is deprecated, please use URI.decode_query/1"
+    decode_query_dict(q, dict)
+  end
+
+  def decode_query(q, map) when is_binary(q) and is_map(map) do
+    decode_query_map(q, map)
+  end
+
+  def decode_query(q, dict) when is_binary(q) do
+    IO.warn "URI.decode_query/2 is deprecated, please use URI.decode_query/1"
+    decode_query_dict(q, dict)
+  end
+
+  defp decode_query_map(q, map) do
+    case do_decode_query(q) do
+      nil         -> map
+      {{k, v}, q} -> decode_query_map(q, Map.put(map, k, v))
+    end
+  end
+
+  defp decode_query_dict(q, dict) do
     case do_decode_query(q) do
       nil         -> dict
-      {{k, v}, q} -> decode_query(q, Dict.put(dict, k, v))
+      {{k, v}, q} -> decode_query_dict(q, Dict.put(dict, k, v))
     end
   end
 
@@ -300,19 +326,15 @@ defmodule URI do
     destructure [_, _, scheme, _, authority, path, _, query, _, fragment], parts
     {userinfo, host, port} = split_authority(authority)
 
-    if authority do
-      authority = ""
-
-      if userinfo, do: authority = authority <> userinfo <> "@"
-      if host, do: authority = authority <> host
-      if port, do: authority = authority <> ":" <> Integer.to_string(port)
-    end
+    authority = authority &&
+      IO.iodata_to_binary([
+        if(userinfo, do: userinfo <> "@", else: ""),
+        host || "",
+        if(port, do: ":" <> Integer.to_string(port), else: "")
+      ])
 
     scheme = normalize_scheme(scheme)
-
-    if is_nil(port) and not is_nil(scheme) do
-      port = default_port(scheme)
-    end
+    port   = port || (scheme && default_port(scheme))
 
     %URI{
       scheme: scheme, path: path, query: query,
@@ -351,34 +373,102 @@ defmodule URI do
       "http://google.com"
   """
   defdelegate to_string(uri), to: String.Chars.URI
+
+  @doc ~S"""
+  Merges two URIs.
+
+  This function merges two URIs as per [RFC3986, section 5.2](http://tools.ietf.org/html/rfc3986#section-5.2).
+
+  ## Examples
+
+      iex> URI.merge(URI.parse("http://google.com"), "/query") |> to_string
+      "http://google.com/query"
+
+      iex> URI.merge("http://example.com", "http://google.com") |> to_string
+      "http://google.com"
+
+  """
+  def merge(%URI{authority: nil}, _rel) do
+    raise ArgumentError, "you must merge onto an absolute URI"
+  end
+  def merge(_base, %URI{scheme: rel_scheme} = rel) when rel_scheme != nil do
+    rel
+  end
+  def merge(%URI{} = base, %URI{path: rel_path} = rel) when rel_path in ["", nil] do
+    %{base | query: rel.query || base.query, fragment: rel.fragment}
+  end
+  def merge(%URI{} = base, %URI{} = rel) do
+    new_path = merge_paths(base.path, rel.path)
+    %{base | path: new_path, query: rel.query, fragment: rel.fragment}
+  end
+  def merge(base, rel) do
+    merge(parse(base), parse(rel))
+  end
+
+  defp merge_paths(nil, rel_path),
+    do: merge_paths("/", rel_path)
+  defp merge_paths(_, "/" <> _ = rel_path),
+    do: rel_path
+  defp merge_paths(base_path, rel_path) do
+    [_ | base_segments] = path_to_segments(base_path)
+    path_to_segments(rel_path)
+    |> Kernel.++(base_segments)
+    |> remove_dot_segments([])
+    |> Enum.join("/")
+  end
+
+  defp remove_dot_segments([], [head, ".." | acc]),
+    do: remove_dot_segments([], [head | acc])
+  defp remove_dot_segments([], acc),
+    do: acc
+  defp remove_dot_segments(["." | tail], acc),
+    do: remove_dot_segments(tail, acc)
+  defp remove_dot_segments([head | tail], ["..", ".." | _] = acc),
+    do: remove_dot_segments(tail, [head | acc])
+  defp remove_dot_segments(segments, [_, ".." | acc]),
+    do: remove_dot_segments(segments, acc)
+  defp remove_dot_segments([head | tail], acc),
+    do: remove_dot_segments(tail, [head | acc])
+
+  def path_to_segments(path) do
+    [head | tail] = String.split(path, "/")
+    reverse_and_discard_empty(tail, [head])
+  end
+
+  defp reverse_and_discard_empty([], acc),
+    do: acc
+  defp reverse_and_discard_empty([head], acc),
+    do: [head | acc]
+  defp reverse_and_discard_empty(["" | tail], acc),
+    do: reverse_and_discard_empty(tail, acc)
+  defp reverse_and_discard_empty([head | tail], acc),
+    do: reverse_and_discard_empty(tail, [head | acc])
 end
 
 defimpl String.Chars, for: URI do
-  def to_string(uri) do
-    scheme = uri.scheme
-
-    if scheme && (port = URI.default_port(scheme)) do
-      if uri.port == port, do: uri = %{uri | port: nil}
-    end
+  def to_string(%{scheme: scheme, port: port, path: path,
+                  query: query, fragment: fragment} = uri) do
+    uri =
+      case scheme && URI.default_port(scheme) do
+        ^port -> %{uri | port: nil}
+        _     -> uri
+      end
 
     # Based on http://tools.ietf.org/html/rfc3986#section-5.3
+    authority = extract_authority(uri)
 
-    if uri.host do
-      authority = uri.host
-      if uri.userinfo, do: authority = uri.userinfo <> "@" <> authority
-      if uri.port, do: authority = authority <> ":" <> Integer.to_string(uri.port)
-    else
-      authority = uri.authority
-    end
+    if(scheme, do: scheme <> ":", else: "") <>
+    if(authority, do: "//" <> authority, else: "") <>
+    if(path, do: path, else: "") <>
+    if(query, do: "?" <> query, else: "") <>
+    if(fragment, do: "#" <> fragment, else: "")
+  end
 
-    result = ""
-
-    if uri.scheme,   do: result = result <> uri.scheme <> ":"
-    if authority,    do: result = result <> "//" <> authority
-    if uri.path,     do: result = result <> uri.path
-    if uri.query,    do: result = result <> "?" <> uri.query
-    if uri.fragment, do: result = result <> "#" <> uri.fragment
-
-    result
+  defp extract_authority(%{host: nil, authority: authority}) do
+    authority
+  end
+  defp extract_authority(%{host: host, userinfo: userinfo, port: port}) do
+    if(userinfo, do: userinfo <> "@" <> host, else: host) <>
+    if(port, do: ":" <> Integer.to_string(port), else: "")
   end
 end

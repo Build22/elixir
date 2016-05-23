@@ -29,7 +29,7 @@ defmodule Mix.Tasks.Compile.ErlangTest do
 
   test "compiles src/b.erl and src/c.erl" do
     in_fixture "compile_erlang", fn ->
-      assert Mix.Tasks.Compile.Erlang.run([]) == :ok
+      assert Mix.Tasks.Compile.Erlang.run(["--verbose"]) == :ok
       assert_received {:mix_shell, :info, ["Compiled src/b.erl"]}
       assert_received {:mix_shell, :info, ["Compiled src/c.erl"]}
 
@@ -40,10 +40,10 @@ defmodule Mix.Tasks.Compile.ErlangTest do
              "_build/dev/lib/sample/ebin/b.beam\n" <>
              "_build/dev/lib/sample/ebin/c.beam"
 
-      assert Mix.Tasks.Compile.Erlang.run([]) == :noop
+      assert Mix.Tasks.Compile.Erlang.run(["--verbose"]) == :noop
       refute_received {:mix_shell, :info, ["Compiled src/b.erl"]}
 
-      assert Mix.Tasks.Compile.Erlang.run(["--force"]) == :ok
+      assert Mix.Tasks.Compile.Erlang.run(["--force", "--verbose"]) == :ok
       assert_received {:mix_shell, :info, ["Compiled src/b.erl"]}
       assert_received {:mix_shell, :info, ["Compiled src/c.erl"]}
     end
@@ -57,6 +57,27 @@ defmodule Mix.Tasks.Compile.ErlangTest do
       File.rm!("src/b.erl")
       assert Mix.Tasks.Compile.Erlang.run([]) == :ok
       refute File.regular?("_build/dev/lib/sample/ebin/b.beam")
+    end
+  end
+
+  test "compilation purges the module" do
+    in_fixture "compile_erlang", fn ->
+      # Create the first version of the module.
+      defmodule :purge_test do
+        def version, do: :v1
+      end
+      assert :v1 == :purge_test.version
+
+      # Create the second version of the module (this time as Erlang source).
+      File.write! "src/purge_test.erl", """
+      -module(purge_test).
+      -compile(export_all).
+      version() -> v2.
+      """
+      assert Mix.Tasks.Compile.Erlang.run([]) == :ok
+
+      # If the module was not purged on recompilation, this would fail.
+      assert :v2 == :purge_test.version
     end
   end
 end

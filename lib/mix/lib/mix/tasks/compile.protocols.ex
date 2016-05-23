@@ -2,7 +2,7 @@ defmodule Mix.Tasks.Compile.Protocols do
   use Mix.Task
 
   @manifest ".compile.protocols"
-  @manifest_vsn :v1
+  @manifest_vsn :v2
 
   @moduledoc ~S"""
   Consolidates all protocols in all paths.
@@ -39,13 +39,14 @@ defmodule Mix.Tasks.Compile.Protocols do
   def run(args) do
     config = Mix.Project.config
     Mix.Task.run "compile", args
-    {opts, _, _} = OptionParser.parse(args, switches: [force: :boolean])
+    {opts, _, _} = OptionParser.parse(args, switches: [force: :boolean, verbose: :boolean])
 
-    output = default_path()
+    output   = default_path(config)
     manifest = Path.join(output, @manifest)
+
     protocols_and_impls =
       unless Mix.Project.umbrella?(config) do
-        Mix.Tasks.Compile.Elixir.protocols_and_impls
+        protocols_and_impls(config)
       end
 
     cond do
@@ -54,12 +55,12 @@ defmodule Mix.Tasks.Compile.Protocols do
         paths = consolidation_paths()
         paths
         |> Protocol.extract_protocols
-        |> consolidate(paths, output, manifest, protocols_and_impls)
+        |> consolidate(paths, output, manifest, protocols_and_impls, opts)
 
       protocols_and_impls ->
         manifest
         |> diff_manifest(protocols_and_impls, output)
-        |> consolidate(consolidation_paths(), output, manifest, protocols_and_impls)
+        |> consolidate(consolidation_paths(), output, manifest, protocols_and_impls, opts)
 
       true ->
         :noop
@@ -74,7 +75,25 @@ defmodule Mix.Tasks.Compile.Protocols do
   end
 
   @doc false
-  def default_path, do: Path.join(Mix.Project.build_path, "consolidated")
+  def default_path(config \\ Mix.Project.config) do
+    Path.join(Mix.Project.build_path(config), "consolidated")
+  end
+
+  defp protocols_and_impls(config) do
+    deps = for(%{scm: scm, opts: opts} <- Mix.Dep.cached(),
+               not scm.fetchable?,
+               do: opts[:build])
+
+    app = Mix.Project.app_path(config)
+
+    protocols_and_impls =
+      for path <- [app | deps] do
+        elixir = Path.join(path, ".compile.elixir")
+        Mix.Compilers.Elixir.protocols_and_impls(elixir)
+      end
+
+    Enum.concat(protocols_and_impls)
+  end
 
   defp consolidation_paths do
     filter_otp(:code.get_path, :code.lib_dir)
@@ -84,30 +103,32 @@ defmodule Mix.Tasks.Compile.Protocols do
     Enum.filter(paths, &(not :lists.prefix(&1, otp)))
   end
 
-  defp consolidate([], _paths, output, manifest, metadata) do
+  defp consolidate([], _paths, output, manifest, metadata, _opts) do
     File.mkdir_p!(output)
     write_manifest(manifest, metadata)
     :noop
   end
 
-  defp consolidate(protocols, paths, output, manifest, metadata) do
+  defp consolidate(protocols, paths, output, manifest, metadata, opts) do
     File.mkdir_p!(output)
 
     protocols
     |> Enum.uniq()
-    |> Enum.map(&Task.async(fn -> consolidate(&1, paths, output) end))
+    |> Enum.map(&Task.async(fn -> consolidate(&1, paths, output, opts) end))
     |> Enum.map(&Task.await(&1, 30_000))
 
     write_manifest(manifest, metadata)
     :ok
   end
 
-  defp consolidate(protocol, paths, output) do
+  defp consolidate(protocol, paths, output, opts) do
     impls = Protocol.extract_impls(protocol, paths)
     reload(protocol)
     {:ok, binary} = Protocol.consolidate(protocol, impls)
     File.write!(Path.join(output, "#{protocol}.beam"), binary)
-    Mix.shell.info "Consolidated #{inspect protocol}"
+    if opts[:verbose] do
+      Mix.shell.info "Consolidated #{inspect protocol}"
+    end
   end
 
   defp reload(module) do
@@ -117,7 +138,7 @@ defmodule Mix.Tasks.Compile.Protocols do
 
   defp read_manifest(manifest) do
     case :file.consult(manifest) do
-      {:ok, [@manifest_vsn|t]} -> t
+      {:ok, [@manifest_vsn | t]} -> t
       _ -> []
     end
   end
@@ -134,23 +155,34 @@ defmodule Mix.Tasks.Compile.Protocols do
   end
 
   defp diff_manifest(manifest, new_metadata, output) do
+    modified = Mix.Utils.last_modified(manifest)
     old_metadata = read_manifest(manifest)
 
-    additions =
-      Enum.flat_map(new_metadata -- old_metadata, fn
-        {_, {:impl, protocol}} -> [protocol]
-        {protocol, :protocol} -> [protocol]
+    protocols =
+      for {protocol, :protocol, beam} <- new_metadata,
+          Mix.Utils.last_modified(beam) > modified,
+          remove_consolidated(protocol, output),
+          do: {protocol, true},
+          into: %{}
+
+    protocols =
+      Enum.reduce(new_metadata -- old_metadata, protocols, fn
+        {_, {:impl, protocol}, _beam}, protocols ->
+          Map.put(protocols, protocol, true)
+        {protocol, :protocol, _beam}, protocols ->
+          Map.put(protocols, protocol, true)
       end)
 
-    removals =
-      Enum.flat_map(old_metadata -- new_metadata, fn
-        {_, {:impl, protocol}} -> [protocol]
-        {protocol, :protocol} ->
+    protocols =
+      Enum.reduce(old_metadata -- new_metadata, protocols, fn
+        {_, {:impl, protocol}, _beam}, protocols ->
+          Map.put(protocols, protocol, true)
+        {protocol, :protocol, _beam}, protocols ->
           remove_consolidated(protocol, output)
-          []
+          protocols
       end)
 
-    additions ++ removals
+    Map.keys(protocols)
   end
 
   defp remove_consolidated(protocol, output) do

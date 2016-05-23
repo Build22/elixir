@@ -48,13 +48,11 @@ defmodule Logger.Backends.Console do
       Application.put_env(:logger, :console, config)
     end
 
-    format =
-      Keyword.get(config, :format)
-      |> Logger.Formatter.compile
+    format   = Logger.Formatter.compile Keyword.get(config, :format)
     level    = Keyword.get(config, :level)
     metadata = Keyword.get(config, :metadata, [])
     colors   = configure_colors(config)
-    %{format: format, metadata: metadata,
+    %{format: format, metadata: Enum.reverse(metadata),
       level: level, colors: colors, device: device}
   end
 
@@ -74,11 +72,16 @@ defmodule Logger.Backends.Console do
       enabled: Keyword.get(colors, :enabled, IO.ANSI.enabled?)}
   end
 
-  defp log_event(level, msg, ts, md, %{colors: colors} = state) do
+  defp log_event(level, msg, ts, md, %{colors: colors, device: device} = state) do
     output =
       format_event(level, msg, ts, md, state)
       |> color_event(level, colors)
-    IO.write(state.device, output)
+    try do
+      IO.write(device, output)
+    rescue
+      ArgumentError ->
+        IO.write(device, Logger.Formatter.prune(output))
+    end
   end
 
   defp format_event(level, msg, ts, md, %{format: format, metadata: keys}) do
@@ -86,12 +89,12 @@ defmodule Logger.Backends.Console do
   end
 
   defp take_metadata(metadata, keys) do
-    Enum.reduce(keys, [], fn key, acc ->
+    Enum.reduce keys, [], fn key, acc ->
       case Keyword.fetch(metadata, key) do
         {:ok, val} -> [{key, val} | acc]
         :error     -> acc
       end
-    end) |> Enum.reverse()
+    end
   end
 
   defp color_event(data, _level, %{enabled: false}), do: data

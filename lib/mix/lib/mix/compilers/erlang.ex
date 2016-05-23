@@ -2,11 +2,13 @@ defmodule Mix.Compilers.Erlang do
   @moduledoc false
 
   @doc """
-  Compiles the files in `src_dirs` with given extensions into
+  Compiles the files in `mappings` with given extensions into
   the destination, automatically invoking the callback for each
   stale input and output pair (or for all if `force` is `true`) and
   removing files that no longer have a source, while keeping the
-  manifest up to date.
+  `manifest` up to date.
+
+  `mappings` should be a list of tuples in the form of `{src, dest}` paths.
 
   ## Examples
 
@@ -24,8 +26,8 @@ defmodule Mix.Compilers.Erlang do
 
   The command above will:
 
-    1. look for files ending with the `lfe` extension in `src`
-       and their `beam` counterpart in `ebin`
+    1. look for files ending with the `lfe` extension in `src` path
+       and their `beam` counterpart in `ebin` path
 
     2. for each stale file (or for all if `force` is `true`),
        invoke the callback passing the calculated input
@@ -44,18 +46,24 @@ defmodule Mix.Compilers.Erlang do
     files = for {src, dest} <- mappings do
               extract_targets(src, src_ext, dest, dest_ext, force)
             end |> Enum.concat
-    compile(manifest, files, callback)
+    compile(manifest, files, src_ext, callback)
   end
 
   @doc """
-  Compiles the given src/dest tuples.
+  Compiles the given `mappings`.
 
-  A manifest file and a callback to be invoked for each src/dest pair
+  `mappings` should be a list of tuples in the form of `{src, dest}`.
+
+  A `manifest` file and a `callback` to be invoked for each src/dest pair
   must be given. A src/dest pair where destination is `nil` is considered
   to be up to date and won't be (re-)compiled.
   """
-  def compile(manifest, tuples, callback) do
-    stale = for {:stale, src, dest} <- tuples, do: {src, dest}
+  def compile(manifest, mappings, callback) do
+    compile(manifest, mappings, :erl, callback)
+  end
+
+  defp compile(manifest, mappings, ext, callback) do
+    stale = for {:stale, src, dest} <- mappings, do: {src, dest}
 
     # Get the previous entries from the manifest
     entries = read_manifest(manifest)
@@ -63,12 +71,13 @@ defmodule Mix.Compilers.Erlang do
     # Files to remove are the ones in the manifest
     # but they no longer have a source
     removed = Enum.filter(entries, fn entry ->
-      not Enum.any?(tuples, fn {_status, _src, dest} -> dest == entry end)
+      not Enum.any?(mappings, fn {_status, _src, dest} -> dest == entry end)
     end)
 
     if stale == [] && removed == [] do
       :noop
     else
+      Mix.Utils.compiling_n(length(stale), ext)
       Mix.Project.ensure_structure()
 
       # Let's prepend the newly created path so compiled files
@@ -81,7 +90,7 @@ defmodule Mix.Compilers.Erlang do
 
       # Compile stale files and print the results
       results = for {input, output} <- stale do
-        interpret_result(input, callback.(input, output))
+        callback.(input, output)
       end
 
       # Write final entries to manifest
@@ -97,7 +106,22 @@ defmodule Mix.Compilers.Erlang do
   end
 
   @doc """
-  Removes compiled files.
+  Ensures the native Erlang application is available.
+  """
+  def ensure_application!(app, input) do
+    case Application.ensure_all_started(app) do
+      {:ok, _} ->
+        :ok
+      {:error, _} ->
+        Mix.raise "Could not compile #{inspect Path.relative_to_cwd(input)} because " <>
+                  "the application \"#{app}\" could not be found. This may happen if " <>
+                  "your package manager broke Erlang into multiple packages and may " <>
+                  "be fixed by installing the missing \"erlang-dev\" and \"erlang-#{app}\" packages."
+    end
+  end
+
+  @doc """
+  Removes compiled files for the given `manifest`.
   """
   def clean(manifest) do
     Enum.each read_manifest(manifest), &File.rm/1
@@ -105,11 +129,11 @@ defmodule Mix.Compilers.Erlang do
   end
 
   @doc """
-  Converts the given file to a format accepted by
+  Converts the given `file` to a format accepted by
   the Erlang compilation tools.
   """
   def to_erl_file(file) do
-    to_char_list(file)
+    to_charlist(file)
   end
 
   defp extract_targets(src_dir, src_ext, dest_dir, dest_ext, force) do
@@ -129,14 +153,6 @@ defmodule Mix.Compilers.Erlang do
 
   defp module_from_artifact(artifact) do
     artifact |> Path.basename |> Path.rootname
-  end
-
-  defp interpret_result(file, result) do
-    case result do
-      {:ok, _} -> Mix.shell.info "Compiled #{file}"
-      :error -> nil
-    end
-    result
   end
 
   defp read_manifest(file) do

@@ -3,17 +3,19 @@ Code.require_file "test_helper.exs", __DIR__
 defmodule ProtocolTest do
   use ExUnit.Case, async: true
 
+  doctest Protocol
+
   defprotocol Sample do
     @type t :: any
     @doc "Ok"
     @spec ok(t) :: boolean
-    def ok(thing)
+    def ok(term)
   end
 
   defprotocol WithAny do
     @fallback_to_any true
     @doc "Ok"
-    def ok(thing)
+    def ok(term)
   end
 
   defprotocol Derivable do
@@ -106,11 +108,11 @@ defmodule ProtocolTest do
       @type t :: any
       @doc "Ok"
       @spec ok(t) :: boolean
-      def ok(thing)
+      def ok(term)
     end)
 
     docs = Code.get_docs(SampleDocsProto, :docs)
-    assert {{:ok, 1}, _, :def, [{:thing, _, nil}], "Ok"} =
+    assert {{:ok, 1}, _, :def, [{:term, _, nil}], "Ok"} =
            List.keyfind(docs, {:ok, 1}, 0)
   end
 
@@ -122,10 +124,10 @@ defmodule ProtocolTest do
 
   test "protocol defines callbacks" do
     assert get_callbacks(Sample, :ok, 1) ==
-      [{:type, [9], :fun, [{:type, [9], :product, [{:user_type, [9], :t, []}]}, {:type, [9], :boolean, []}]}]
+      [{:type, [11], :fun, [{:type, [11], :product, [{:user_type, [11], :t, []}]}, {:type, [11], :boolean, []}]}]
 
     assert get_callbacks(WithAny, :ok, 1) ==
-      [{:type, [16], :fun, [{:type, [16], :product, [{:user_type, [16], :t, []}]}, {:type, [16], :term, []}]}]
+      [{:type, [18], :fun, [{:type, [18], :product, [{:user_type, [18], :t, []}]}, {:type, [18], :term, []}]}]
   end
 
   test "protocol defines functions and attributes" do
@@ -230,7 +232,7 @@ defmodule ProtocolTest do
 
   test "derived implementation keeps local file/line info" do
     assert ProtocolTest.WithAny.ProtocolTest.ImplStruct.__info__(:compile)[:source] ==
-           String.to_char_list(__ENV__.file)
+           String.to_charlist(__ENV__.file)
   end
 
   test "cannot derive without any implementation" do
@@ -259,7 +261,7 @@ defmodule Protocol.ConsolidationTest do
       @type t :: any
       @doc "Ok"
       @spec ok(t) :: boolean
-      def ok(thing)
+      def ok(term)
     end
   )
 
@@ -267,7 +269,7 @@ defmodule Protocol.ConsolidationTest do
     defprotocol WithAny do
       @fallback_to_any true
       @doc "Ok"
-      def ok(thing)
+      def ok(term)
     end
   )
 
@@ -317,6 +319,17 @@ defmodule Protocol.ConsolidationTest do
     refute Protocol.consolidated?(Enumerable)
   end
 
+  test "consolidation prevents new implementations" do
+    assert ExUnit.CaptureIO.capture_io(:stderr, fn ->
+      defimpl WithAny, for: Integer do
+        def ok(_any), do: :ok
+      end
+    end) =~ ~r"the .+WithAny protocol has already been consolidated"
+  after
+    :code.purge(WithAny.Atom)
+    :code.delete(WithAny.Atom)
+  end
+
   test "consolidated implementations without any" do
     assert is_nil Sample.impl_for(:foo)
     assert is_nil Sample.impl_for(fn(x) -> x end)
@@ -349,7 +362,7 @@ defmodule Protocol.ConsolidationTest do
 
   test "consolidation keeps docs" do
     docs = Code.get_docs(Sample, :docs)
-    assert {{:ok, 1}, _, :def, [{:thing, _, nil}], "Ok"} =
+    assert {{:ok, 1}, _, :def, [{:term, _, nil}], "Ok"} =
            List.keyfind(docs, {:ok, 1}, 0)
   end
 

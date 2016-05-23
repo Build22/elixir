@@ -144,7 +144,7 @@ defmodule Kernel.TypespecTest do
 
   test "@type with a binary with a base size" do
     module = test_module do
-      @type mytype :: <<_ :: 3>>
+      @type mytype :: <<_::3>>
     end
 
     assert [type: {:mytype, {:type, _, :binary, [{:integer, _, 3}, {:integer, _, 0}]}, []}] =
@@ -158,6 +158,23 @@ defmodule Kernel.TypespecTest do
 
     assert [type: {:mytype, {:type, _, :binary, [{:integer, _, 0}, {:integer, _, 8}]}, []}] =
            types(module)
+  end
+
+  test "@type with a binary with a size and unit size" do
+    module = test_module do
+      @type mytype :: <<_::3, _::_*8>>
+    end
+
+    assert [type: {:mytype, {:type, _, :binary, [{:integer, _, 3}, {:integer, _, 8}]}, []}] =
+           types(module)
+  end
+
+  test "@type with invalid binary spec" do
+    assert_raise CompileError, fn ->
+      test_module do
+        @type mytype :: <<_::3*8>>
+      end
+    end
   end
 
   test "@type with a range op" do
@@ -244,7 +261,7 @@ defmodule Kernel.TypespecTest do
 
     assert [type: {:mytype,
              {:type, _, :tuple, [
-               {:atom, 0, :timestamp}, {:atom, 0, :foo}, {:type, 0, :term, []}
+               {:atom, 0, :timestamp}, {:type, 0, :term, []}, {:atom, 0, :foo}
              ]},
             []}] = types(module)
   end
@@ -258,7 +275,7 @@ defmodule Kernel.TypespecTest do
 
     assert [type: {:mytype,
              {:type, _, :tuple, [
-               {:atom, 0, :timestamp}, {:atom, 0, :foo}, {:type, 0, :term, []}
+               {:atom, 0, :timestamp}, {:type, 0, :term, []}, {:atom, 0, :foo}
              ]},
             []}] = types(module)
   end
@@ -277,6 +294,14 @@ defmodule Kernel.TypespecTest do
         require Record
         Record.defrecord :timestamp, [date: 1, time: 2]
         @type mytype :: record(:timestamp, no_field: :foo)
+      end
+    end
+  end
+
+  test "@type with an invalid map notation" do
+    assert_raise CompileError, ~r"invalid map specification", fn ->
+      test_module do
+        @type content :: %{atom | String.t => term}
       end
     end
   end
@@ -336,11 +361,11 @@ defmodule Kernel.TypespecTest do
 
   test "@type with a union" do
     module = test_module do
-      @type mytype :: integer | char_list | atom
+      @type mytype :: integer | charlist | atom
     end
 
     assert [type: {:mytype, {:type, _, :union, [{:type, _, :integer, []},
-             {:remote_type, _, [{:atom, _, :elixir}, {:atom, _, :char_list}, []]},
+             {:remote_type, _, [{:atom, _, :elixir}, {:atom, _, :charlist}, []]},
              {:type, _, :atom, []}]}, []}] =
            types(module)
   end
@@ -458,7 +483,7 @@ defmodule Kernel.TypespecTest do
       assert [] == specs(module)
     end
 
-    assert output =~ "warning: function myfun/1 is unused"
+    assert output =~ "function myfun/1 is unused"
   end
 
   test "@spec(spec) with guards" do
@@ -496,7 +521,7 @@ defmodule Kernel.TypespecTest do
     module = test_module do
       def myfun(x), do: x
       @spec myfun(integer)   :: integer
-      @spec myfun(char_list) :: char_list
+      @spec myfun(charlist) :: charlist
       @callback cb(integer)  :: integer
     end
 
@@ -505,8 +530,8 @@ defmodule Kernel.TypespecTest do
 
     assert [{{:myfun, 1}, [
              {:type, _, :fun, [{:type, _, :product, [
-               {:remote_type, _, [{:atom, _, :elixir}, {:atom, _, :char_list}, []]}]},
-               {:remote_type, _, [{:atom, _, :elixir}, {:atom, _, :char_list}, []]}]},
+               {:remote_type, _, [{:atom, _, :elixir}, {:atom, _, :charlist}, []]}]},
+               {:remote_type, _, [{:atom, _, :elixir}, {:atom, _, :charlist}, []]}]},
              {:type, _, :fun, [{:type, _, :product, [{:type, _, :integer, []}]}, {:type, _, :integer, []}]}]}] =
            specs(module)
   end
@@ -537,16 +562,18 @@ defmodule Kernel.TypespecTest do
       (quote do: @type simple_type() :: integer()),
       (quote do: @type param_type(p) :: [p]),
       (quote do: @type union_type() :: integer() | binary() | boolean()),
-      (quote do: @type binary_type1() :: <<_ :: _ * 8>>),
-      (quote do: @type binary_type2() :: <<_ :: 3 * 8>>),
-      (quote do: @type binary_type3() :: <<_ :: 3>>),
+      (quote do: @type binary_type1() :: <<_::_*8>>),
+      (quote do: @type binary_type2() :: <<_::3>>),
+      (quote do: @type binary_type3() :: <<_::3, _::_*8>>),
       (quote do: @type tuple_type() :: {integer()}),
       (quote do: @type ftype() :: (() -> any()) | (() -> integer()) | ((integer() -> integer()))),
-      (quote do: @type cl() :: char_list()),
+      (quote do: @type cl() :: charlist()),
       (quote do: @type st() :: struct()),
       (quote do: @type ab() :: as_boolean(term())),
+      (quote do: @type kw() :: keyword()),
+      (quote do: @type kwt() :: keyword(term())),
       (quote do: @type vaf() :: (... -> any())),
-      (quote do: @type rng() :: 1 .. 10),
+      (quote do: @type rng() :: 1..10),
       (quote do: @type opts() :: [first: integer(), step: integer(), last: integer()]),
       (quote do: @type ops() :: {+1, -1}),
       (quote do: @type a_map() :: map()),
@@ -662,7 +689,7 @@ defmodule Kernel.TypespecTest do
     end
   end
 
-  test "@spec gives a nice error message when return type is missing" do
+  test "@spec shows readable error message when return type is missing" do
     assert_raise CompileError, ~r"type specification missing return type: myfun\(integer\)", fn ->
       test_module do
         @spec myfun(integer)

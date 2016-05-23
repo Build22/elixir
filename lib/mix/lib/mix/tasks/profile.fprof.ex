@@ -30,7 +30,9 @@ defmodule Mix.Tasks.Profile.Fprof do
     * `--parallel-require`, `-pr` - requires pattern in parallel
     * `--no-compile`    - do not compile even if files require compilation
     * `--no-deps-check` - do not check dependencies
+    * `--no-archives-check` - do not check archives
     * `--no-start`      - do not start applications after compilation
+    * `--no-elixir-version-check` - do not check the Elixir version from mix.exs
 
   ## Profile output
 
@@ -102,19 +104,21 @@ defmodule Mix.Tasks.Profile.Fprof do
   this should give you a more correct insight into your real bottlenecks.
   """
 
+  @switches [parallel_require: :keep, require: :keep, eval: :keep, config: :keep,
+             compile: :boolean, deps_check: :boolean, start: :boolean, archives_check: :boolean,
+             details: :boolean, callers: :boolean, sort: :string, elixir_version_check: :boolean]
+
   @spec run(OptionParser.argv) :: :ok
   def run(args) do
-    {opts, head, _} = OptionParser.parse_head(args,
+    {opts, head} = OptionParser.parse_head!(args,
       aliases: [r: :require, pr: :parallel_require, e: :eval, c: :config],
-      switches: [parallel_require: :keep, require: :keep, eval: :keep, config: :keep,
-                 compile: :boolean, deps_check: :boolean, start: :boolean,
-                 details: :boolean, callers: :boolean, sort: :string])
+      strict: @switches)
 
     {file, argv} =
       case {Keyword.has_key?(opts, :eval), head} do
-        {true, _}  -> {nil, head}
-        {_, [h|t]} -> {h, t}
-        {_, []}    -> {nil, []}
+        {true, _}    -> {nil, head}
+        {_, [h | t]} -> {h, t}
+        {_, []}      -> {nil, []}
       end
 
     System.argv(argv)
@@ -215,7 +219,7 @@ defmodule Mix.Tasks.Profile.Fprof do
     else
       :ok ->
         {_in, analysis_output} = StringIO.contents(analyse_dest)
-        String.to_char_list(analysis_output)
+        String.to_charlist(analysis_output)
     after
       StringIO.close(analyse_dest)
     end
@@ -230,8 +234,8 @@ defmodule Mix.Tasks.Profile.Fprof do
     |> Enum.each(&print_analysis_result/1)
   end
 
-  defp next_term(char_list) do
-    case :erl_scan.tokens([], char_list, 1) do
+  defp next_term(charlist) do
+    case :erl_scan.tokens([], charlist, 1) do
       {:done, result, leftover} ->
         case result do
           {:ok, tokens, _} ->

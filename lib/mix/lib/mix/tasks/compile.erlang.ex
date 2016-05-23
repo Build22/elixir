@@ -41,6 +41,12 @@ defmodule Mix.Tasks.Compile.Erlang do
 
       For a list of the many more available options,
       see [`:compile.file/2`](http://www.erlang.org/doc/man/compile.html#file-2).
+
+  For example, to configure the `erlc_options` for your Erlang project you
+  may run:
+
+      erlc_options: [:debug_info, {:i, 'path/to/include'}]
+
   """
 
   @doc """
@@ -49,12 +55,16 @@ defmodule Mix.Tasks.Compile.Erlang do
   @spec run(OptionParser.argv) :: :ok | :noop
   def run(args) do
     {opts, _, _} = OptionParser.parse(args, switches: [force: :boolean])
-
     project      = Mix.Project.config
     source_paths = project[:erlc_paths]
+    files        = Mix.Utils.extract_files(source_paths, [:erl])
+    do_run(files, opts, project, source_paths)
+  end
+
+  defp do_run([], _, _, _), do: :noop
+  defp do_run(files, opts, project, source_paths) do
     include_path = to_erl_file project[:erlc_include_path]
     compile_path = to_erl_file Mix.Project.compile_path(project)
-    files        = Mix.Utils.extract_files(source_paths, [:erl])
 
     erlc_options = project[:erlc_options] || []
     erlc_options = erlc_options ++ [{:outdir, compile_path}, {:i, include_path}, :report]
@@ -74,8 +84,22 @@ defmodule Mix.Tasks.Compile.Erlang do
 
     Mix.Compilers.Erlang.compile(manifest(), tuples, fn
       input, _output ->
+        # We're purging the module because a previous compiler (e.g. Phoenix)
+        # might have already loaded the previous version of it.
+        module = Path.basename(input, ".erl") |> String.to_atom
+        :code.purge(module)
+        :code.delete(module)
+
         file = to_erl_file(Path.rootname(input, ".erl"))
-        :compile.file(file, erlc_options)
+        case :compile.file(file, erlc_options) do
+          {:ok, _} = ok ->
+            if opts[:verbose] do
+              Mix.shell.info "Compiled #{input}"
+            end
+            ok
+          :error ->
+            :error
+        end
     end)
   end
 
@@ -114,14 +138,14 @@ defmodule Mix.Tasks.Compile.Erlang do
     case form do
       {:attribute, _, :file, {include_file, _}} when file != include_file ->
         if File.regular?(include_file) do
-          %{erl | includes: [include_file|erl.includes]}
+          %{erl | includes: [include_file | erl.includes]}
         else
           erl
         end
       {:attribute, _, :behaviour, behaviour} ->
-        %{erl | behaviours: [behaviour|erl.behaviours]}
+        %{erl | behaviours: [behaviour | erl.behaviours]}
       {:attribute, _, :compile, value} ->
-        %{erl | compile: [value|erl.compile]}
+        %{erl | compile: [value | erl.compile]}
       _ ->
         erl
     end
@@ -159,7 +183,7 @@ defmodule Mix.Tasks.Compile.Erlang do
   defp annotate_target(erl, compile_path, force) do
     beam = Path.join(compile_path, "#{erl.module}#{:code.objfile_extension}")
 
-    if force || Mix.Utils.stale?([erl.file|erl.includes], [beam]) do
+    if force || Mix.Utils.stale?([erl.file | erl.includes], [beam]) do
       {:stale, erl.file, beam}
     else
       {:ok, erl.file, beam}

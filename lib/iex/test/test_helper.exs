@@ -27,6 +27,7 @@ defmodule IEx.Case do
   using do
     quote do
       import ExUnit.CaptureIO
+      import ExUnit.CaptureLog
       import unquote(__MODULE__)
     end
   end
@@ -37,7 +38,7 @@ defmodule IEx.Case do
   setup do
     on_exit fn ->
       env = @iex_env
-      Enum.each(env, fn {k,_} -> Application.delete_env(:iex, k) end)
+      Enum.each(env, fn {k, _} -> Application.delete_env(:iex, k) end)
       IEx.configure(env)
     end
     :ok
